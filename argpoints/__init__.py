@@ -210,7 +210,7 @@ def subcommand(name=None, description=None, version=None):
         _execvp(command, sys.argv[1:])
     except OSError as e:
         sys.exit(
-            f"Error executing {name.capitalize()} command {subcommand}: {e}. errno={e.errno}"
+            f"Error executing {name.capitalize()} command {subcommand}: {e}."
         )
 
 
