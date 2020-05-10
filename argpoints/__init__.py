@@ -46,15 +46,17 @@ class CommandParser(argparse.ArgumentParser):
 
 def command_parser(name, description):
     parser = CommandParser(command_name=name, description=description)
-    group = parser.add_mutually_exclusive_group(required=True)
+    parser.add_argument("-C", dest="cwd", help="Working directory for subcommand")
+    
+    # group = parser.add_mutually_exclusive_group(required=True)
     # don't use argparse's version action because it prints to stderr on py2
-    group.add_argument(
+    parser.add_argument(
         "--version",
         action="store_true",
         help=f"show the {name} command's version and exit",
     )
-    group.add_argument(
-        "subcommand", type=str, nargs="?", help="the subcommand to launch"
+    parser.add_argument(
+        "subcommand", type=str, nargs="...", metavar="subcommand", help="the subcommand to launch"
     )
 
     return parser
@@ -103,7 +105,7 @@ def _execvp(cmd, argv):
         if cmd_path is None:
             raise OSError("%r not found" % cmd, errno.ENOENT)
         p = Popen([cmd_path] + argv[1:])
-        # Don't raise KeyboardInterrupt in the parent process.
+        # Don't raise KeyboardInterrupt in the parent proc
         # Set this after spawning, to avoid subprocess inheriting handler.
         import signal
 
@@ -133,7 +135,7 @@ def _command_abspath(name, subcommand):
             f"{name.capitalize()} command `{subcommand_name}` is not executable."
         )
 
-    return abs_path
+    return os.path.abspath(abs_path)
 
 
 def _path_with_self():
@@ -175,6 +177,26 @@ def _path_with_self():
     return path_list
 
 
+class MultipleExclusiveArgumentsPassed(Exception):
+    pass
+
+
+class NoChoicePassed(Exception):
+    pass
+
+
+def _oneof_args(args, conditions, required):
+    already_found = False
+    for name, default_condition in conditions:
+        if getattr(args, name) != default_condition:
+            if already_found:
+                raise MultipleExclusiveArgumentsPassed
+            already_found = True
+
+    if required and not already_found:
+        raise NoChoicePassed
+
+
 def subcommand(name=None, description=None, version=None):
     if name is None:
         name = os.path.basename(sys.argv[0])
@@ -185,17 +207,27 @@ def subcommand(name=None, description=None, version=None):
     if description is None:
         description = f"Subcommand parser for '{name}' command"
 
-    if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
-        # Don't parse if a subcommand is given
-        # Avoids argparse gobbling up args passed to subcommand, such as `-h`.
-        subcommand = sys.argv[1]
-    else:
-        parser = command_parser(name, description)
-        args, opts = parser.parse_known_args()
-        subcommand = args.subcommand
-        if args.version:
-            print(f"{name:<17}:", version)
-            return
+
+    parser = command_parser(name, description)
+    args, opts = parser.parse_known_args()
+    _oneof_args(args, [("version", False), ("subcommand", [])], required=True)
+
+    if args.version:
+        print(f"{name:<17}:", version)
+        return
+
+    subcommand, subargs = args.subcommand[0], args.subcommand
+    # if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
+    #     # Don't parse if a subcommand is given
+    #     # Avoids argparse gobbling up args passed to subcommand, such as `-h`.
+    #     subcommand = sys.argv[1]
+    # else:*argrest
+    #     parser = command_parser(name, description)
+    #     args, opts = parser.parse_known_args()
+    #     subcommand = args.subcommand
+    #     if args.version:
+    #         print(f"{name:<17}:", version)
+    #         return
 
     if not subcommand:
         parser.print_usage(file=sys.stderr)
@@ -206,8 +238,11 @@ def subcommand(name=None, description=None, version=None):
     except CommandMissing as e:
         sys.exit(e)
 
+    if args.cwd:
+        os.chdir(args.cwd)
+
     try:
-        _execvp(command, sys.argv[1:])
+        _execvp(command, subargs)
     except OSError as e:
         sys.exit(
             f"Error executing {name.capitalize()} command {subcommand}: {e}."
